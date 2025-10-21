@@ -12,6 +12,7 @@ type Config struct {
 	Discord DiscordConfig `mapstructure:"discord"`
 	Grok    GrokConfig    `mapstructure:"grok"`
 	Bot     BotConfig     `mapstructure:"bot"`
+	Server  ServerConfig  `mapstructure:"server"`
 }
 
 // DiscordConfig holds Discord-specific configuration
@@ -40,6 +41,12 @@ type BotConfig struct {
 	DefaultSystemMessage string `mapstructure:"default_system_message"`
 }
 
+// ServerConfig holds web server configuration
+type ServerConfig struct {
+	Port    string `mapstructure:"port"`
+	Enabled bool   `mapstructure:"enabled"`
+}
+
 // DefaultConfig returns a configuration with sensible defaults
 func DefaultConfig() *Config {
 	return &Config{
@@ -62,6 +69,10 @@ func DefaultConfig() *Config {
 			EnableHistory:        true,
 			MaxMessageSize:       2000,
 			DefaultSystemMessage: getDefaultSystemMessage(),
+		},
+		Server: ServerConfig{
+			Port:    "8080",
+			Enabled: true,
 		},
 	}
 }
@@ -102,6 +113,8 @@ func LoadConfig(configPath string) (*Config, error) {
 	viper.BindEnv("bot.enable_history", "GROK_ENABLE_HISTORY")
 	viper.BindEnv("bot.max_message_size", "GROK_MAX_MESSAGE_SIZE")
 	viper.BindEnv("bot.default_system_message", "GROK_DEFAULT_SYSTEM_MESSAGE")
+	viper.BindEnv("server.port", "GROK_BOT_SERVER_PORT")
+	viper.BindEnv("server.enabled", "GROK_BOT_SERVER_ENABLED")
 
 	// Read config file
 	if err := viper.ReadInConfig(); err != nil {

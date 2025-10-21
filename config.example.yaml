@@ -128,3 +128,13 @@ bot:
     <:CHAD:1222721809393385585> – alpha / confident energy.
     <:INSANITY:1223028653827297351> – shock / extreme reaction.
     <:oh:1223683806998036620> – simple "oh" – realization or silence.
+
+# Web Server Configuration
+server:
+  # Port for the web server (default: "8080")
+  # Can also be set via GROK_BOT_SERVER_PORT environment variable
+  port: "8080"
+  
+  # Enable/disable the web server (default: true)
+  # Can also be set via GROK_BOT_SERVER_ENABLED environment variable
+  enabled: true

@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -60,6 +61,46 @@ func RunWithConfig(cfg *Config) {
 	signal.Notify(c, os.Interrupt)
 	<-c
 
+}
+
+// RunWithConfigAsync runs the bot with the provided configuration and supports context cancellation
+func RunWithConfigAsync(ctx context.Context, cfg *Config) {
+	config = cfg
+
+	// Initialize Grok client
+	grokClient = NewGrokClient(&config.Grok)
+
+	// Initialize chat history with configurable size
+	chatHistory = NewChatHistory(config.Bot.MaxHistory)
+
+	if config.Discord.Token == "" {
+		log.Fatal("Discord Bot token not provided")
+	}
+
+	discord, err := discordgo.New("Bot " + config.Discord.Token)
+	if err != nil {
+		log.Fatal("Error connecting to discord")
+	}
+
+	discord.AddHandler(handleMessage)
+
+	err = discord.Open()
+	if err != nil {
+		log.Fatal("Error opening Discord connection:", err)
+	}
+
+	defer discord.Close()
+
+	// Populate chat history with recent messages if enabled
+	if config.Bot.EnableHistory {
+		populateHistoryFromChannels(discord)
+	}
+
+	log.Println("Grok-bot running...")
+
+	// Wait for context cancellation instead of signal
+	<-ctx.Done()
+	log.Println("Discord bot shutting down...")
 }
 
 // populateHistoryFromChannels reads recent messages from channels with read/write access to populate chat history

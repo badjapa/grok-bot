@@ -88,6 +88,10 @@ Configuration values are loaded in the following order (later sources override e
 - `bot.max_message_size` - Max message size before file (default: 2000)
 - `bot.default_system_message` - Custom system message for bot personality (default: Discord-specific instructions with emojis)
 
+### Web Server Configuration
+- `server.port` - Port for the web server (default: "8080")
+- `server.enabled` - Enable/disable the web server (default: true)
+
 ## Customizing the Bot's Personality
 
 You can customize the bot's personality and behavior by modifying the `bot.default_system_message` configuration. This message is sent to the AI model with every request and defines how the bot should behave.
@@ -119,6 +123,32 @@ bot:
 ```
 
 The default system message includes Discord-specific instructions and emoji references, but you can replace it entirely with your own custom message to change the bot's personality and behavior.
+
+## Concurrent Execution
+
+The bot now runs both the Discord bot and web server concurrently using goroutines. This allows you to:
+
+- **Monitor bot status** via web interface at `http://localhost:8080`
+- **Health checks** at `/health` endpoint for monitoring systems
+- **Detailed status** at `/status` endpoint with JSON response
+- **Graceful shutdown** - both services stop cleanly when you press Ctrl+C
+
+### Web Server Endpoints
+
+- `/` - Main status page with HTML interface
+- `/health` - Health check endpoint returning JSON status
+- `/status` - Detailed status information in JSON format
+
+### Environment Variables for Server
+
+```bash
+export GROK_BOT_SERVER_PORT="8080"      # Server port
+export GROK_BOT_SERVER_ENABLED="true"    # Enable/disable server
+```
+
+### Disabling the Web Server
+
+You can disable the web server by setting `server.enabled: false` in your configuration file or using the environment variable `GROK_BOT_SERVER_ENABLED=false`.
 
 ## Backward Compatibility
 
