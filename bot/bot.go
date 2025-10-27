@@ -264,7 +264,7 @@ func handleMessage(discord *discordgo.Session, message *discordgo.MessageCreate)
 		messages := make([]ChatMessage, 0, 1+len(prior)+1)
 		messages = append(messages, ChatMessage{Role: "system", Content: config.Bot.DefaultSystemMessage})
 		messages = append(messages, prior...)
-		messages = append(messages, ChatMessage{Role: "user", Content: content})
+		messages = append(messages, ChatMessage{Role: "user", Content: content, Username: message.Author.Username})
 
 		// Send typing indicator
 		discord.ChannelTyping(message.ChannelID)
