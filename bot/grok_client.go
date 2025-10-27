@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 )
 
 // GrokClient handles communication with XAI's Grok API
@@ -14,11 +15,20 @@ type GrokClient struct {
 	Client *http.Client
 }
 
+// ContentItem represents a single content item in a multimodal message
+type ContentItem struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL *struct {
+		URL string `json:"url"`
+	} `json:"image_url,omitempty"`
+}
+
 // ChatMessage represents a message in the chat completion request
 type ChatMessage struct {
-	Role     string `json:"role"`
-	Content  string `json:"content"`
-	Username string `json:"username,omitempty"` // Optional username for context
+	Role     string      `json:"role"`
+	Content  interface{} `json:"content"`            // Can be string or []ContentItem for multimodal
+	Username string      `json:"username,omitempty"` // Optional username for context
 }
 
 // ChatCompletionRequest represents the request payload for chat completions
@@ -39,8 +49,8 @@ type ChatCompletionResponse struct {
 	Choices []struct {
 		Index   int `json:"index"`
 		Message struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
+			Role    string      `json:"role"`
+			Content interface{} `json:"content"` // Can be string or []ContentItem for multimodal
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
@@ -77,7 +87,21 @@ func (g *GrokClient) CreateChatCompletion(messages []ChatMessage) (string, error
 	for i, msg := range messages {
 		formattedMessages[i] = msg
 		if msg.Username != "" && msg.Role == "user" {
-			formattedMessages[i].Content = fmt.Sprintf("[%s]: %s", msg.Username, msg.Content)
+			// Handle both string and multimodal content
+			switch content := msg.Content.(type) {
+			case string:
+				formattedMessages[i].Content = fmt.Sprintf("[%s]: %s", msg.Username, content)
+			case []ContentItem:
+				// For multimodal content, add username to text items
+				newContent := make([]ContentItem, len(content))
+				for j, item := range content {
+					newContent[j] = item
+					if item.Type == "text" {
+						newContent[j].Text = fmt.Sprintf("[%s]: %s", msg.Username, item.Text)
+					}
+				}
+				formattedMessages[i].Content = newContent
+			}
 		}
 	}
 
@@ -131,7 +155,23 @@ func (g *GrokClient) CreateChatCompletion(messages []ChatMessage) (string, error
 		return "", fmt.Errorf("no choices returned from XAI API")
 	}
 
-	return response.Choices[0].Message.Content, nil
+	// Extract content from response, handling both string and multimodal content
+	content := response.Choices[0].Message.Content
+	switch content := content.(type) {
+	case string:
+		return content, nil
+	case []ContentItem:
+		// For multimodal responses, extract text content
+		var textContent strings.Builder
+		for _, item := range content {
+			if item.Type == "text" {
+				textContent.WriteString(item.Text)
+			}
+		}
+		return textContent.String(), nil
+	default:
+		return "", fmt.Errorf("unexpected content type in response")
+	}
 }
 
 // CompleteText is a convenience method for simple text completion
@@ -162,4 +202,53 @@ func (g *GrokClient) CompleteTextWithSystem(systemMessage, userMessage string) (
 		},
 	}
 	return g.CreateChatCompletion(messages)
+}
+
+// CreateTextMessage creates a simple text-only ChatMessage
+func CreateTextMessage(role, content, username string) ChatMessage {
+	return ChatMessage{
+		Role:     role,
+		Content:  content,
+		Username: username,
+	}
+}
+
+// CreateMultimodalMessage creates a ChatMessage with both text and image content
+func CreateMultimodalMessage(role, textContent string, imageURLs []string, username string) ChatMessage {
+	if len(imageURLs) == 0 {
+		// No images, return simple text message
+		return CreateTextMessage(role, textContent, username)
+	}
+
+	// Create multimodal content
+	var contentItems []ContentItem
+
+	// Add text content if provided
+	if textContent != "" {
+		contentItems = append(contentItems, ContentItem{
+			Type: "text",
+			Text: textContent,
+		})
+	}
+
+	// Add image URLs
+	for _, imgURL := range imageURLs {
+		contentItems = append(contentItems, ContentItem{
+			Type: "image_url",
+			ImageURL: &struct {
+				URL string `json:"url"`
+			}{URL: imgURL},
+		})
+	}
+
+	return ChatMessage{
+		Role:     role,
+		Content:  contentItems,
+		Username: username,
+	}
+}
+
+// CreateImageOnlyMessage creates a ChatMessage with only image content
+func CreateImageOnlyMessage(role string, imageURLs []string, username string) ChatMessage {
+	return CreateMultimodalMessage(role, "", imageURLs, username)
 }

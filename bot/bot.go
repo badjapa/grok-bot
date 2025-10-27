@@ -169,7 +169,7 @@ func populateHistoryFromChannels(discord *discordgo.Session) {
 			// Filter out messages that couldn't be parsed due to unknown components
 			var validMessages []*discordgo.Message
 			for _, msg := range messages {
-				if msg != nil && msg.Content != "" {
+				if msg != nil && (msg.Content != "" || len(msg.Attachments) > 0) {
 					validMessages = append(validMessages, msg)
 				}
 			}
@@ -184,9 +184,10 @@ func populateHistoryFromChannels(discord *discordgo.Session) {
 					continue
 				}
 
-				// Skip empty messages
+				// Skip empty messages (no content and no attachments)
 				content := strings.TrimSpace(msg.Content)
-				if content == "" {
+				imageURLs := extractImageURLsFromAttachments(msg.Attachments)
+				if content == "" && len(imageURLs) == 0 {
 					continue
 				}
 
@@ -198,7 +199,7 @@ func populateHistoryFromChannels(discord *discordgo.Session) {
 						break
 					}
 				}
-				if !addressed {
+				if !addressed && content != "" {
 					addressed = strings.Contains(strings.ToLower(content), "@grok")
 				}
 
@@ -210,13 +211,10 @@ func populateHistoryFromChannels(discord *discordgo.Session) {
 					cleanContent = strings.TrimSpace(cleanContent)
 				}
 
-				if cleanContent != "" {
-					// Add user message to history
-					chatHistory.Append(channel.ID, ChatMessage{
-						Role:     "user",
-						Content:  cleanContent,
-						Username: msg.Author.Username,
-					})
+				if cleanContent != "" || len(imageURLs) > 0 {
+					// Add user message to history using multimodal message creation
+					multimodalMsg := CreateMultimodalMessage("user", cleanContent, imageURLs, msg.Author.Username)
+					chatHistory.Append(channel.ID, multimodalMsg)
 
 					// If this was an addressed message, look for bot's response in subsequent messages
 					if addressed {
@@ -252,9 +250,19 @@ func handleMessage(discord *discordgo.Session, message *discordgo.MessageCreate)
 
 	content := strings.TrimSpace(message.Content)
 	channelID := message.ChannelID
+	attachments := message.Attachments
+	imageURLs := make([]string, 0)
+	if len(attachments) > 0 {
+		for _, attachment := range attachments {
+			if strings.HasPrefix(attachment.ContentType, "image/") {
+				imageURLs = append(imageURLs, attachment.URL)
+			}
+		}
+	}
 
 	if !doesMessageMention(message.Mentions, discord.State.User.ID) {
-		chatHistory.Append(channelID, ChatMessage{Role: "user", Content: content, Username: message.Author.Username})
+
+		chatHistory.Append(channelID, CreateMultimodalMessage("user", content, imageURLs, message.Author.Username))
 	} else {
 		// Remove the bot mention from the content
 		content = strings.ReplaceAll(content, fmt.Sprintf("<@%s>", discord.State.User.ID), "")
@@ -264,7 +272,7 @@ func handleMessage(discord *discordgo.Session, message *discordgo.MessageCreate)
 		messages := make([]ChatMessage, 0, 1+len(prior)+1)
 		messages = append(messages, ChatMessage{Role: "system", Content: config.Bot.DefaultSystemMessage})
 		messages = append(messages, prior...)
-		messages = append(messages, ChatMessage{Role: "user", Content: content, Username: message.Author.Username})
+		messages = append(messages, CreateMultimodalMessage("user", content, imageURLs, message.Author.Username))
 
 		// Send typing indicator
 		discord.ChannelTyping(message.ChannelID)
@@ -278,8 +286,8 @@ func handleMessage(discord *discordgo.Session, message *discordgo.MessageCreate)
 		}
 
 		// Append to history: user then assistant
-		chatHistory.Append(channelID, ChatMessage{Role: "user", Content: content, Username: message.Author.Username})
-		chatHistory.Append(channelID, ChatMessage{Role: "assistant", Content: response})
+		chatHistory.Append(channelID, CreateMultimodalMessage("user", content, imageURLs, message.Author.Username))
+		chatHistory.Append(channelID, CreateTextMessage("assistant", response, ""))
 
 		// Send the response back to Discord
 		err = sendMessage(discord, message.ChannelID, response)
@@ -347,6 +355,43 @@ func sendAsMarkdownFile(discord *discordgo.Session, channelID, content string) e
 	}
 
 	return nil
+}
+
+// extractImageURLsFromAttachments extracts image URLs from Discord message attachments
+func extractImageURLsFromAttachments(attachments []*discordgo.MessageAttachment) []string {
+	var imageURLs []string
+
+	for _, attachment := range attachments {
+		if attachment != nil && isImageAttachment(attachment) {
+			imageURLs = append(imageURLs, attachment.URL)
+		}
+	}
+
+	return imageURLs
+}
+
+// isImageAttachment checks if a Discord attachment is an image
+func isImageAttachment(attachment *discordgo.MessageAttachment) bool {
+	if attachment == nil {
+		return false
+	}
+
+	// Check file extension
+	filename := strings.ToLower(attachment.Filename)
+	imageExtensions := []string{".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".svg"}
+	for _, ext := range imageExtensions {
+		if strings.HasSuffix(filename, ext) {
+			return true
+		}
+	}
+
+	// Also check content type if available
+	if attachment.ContentType != "" {
+		contentType := strings.ToLower(attachment.ContentType)
+		return strings.HasPrefix(contentType, "image/")
+	}
+
+	return false
 }
 
 func doesMessageMention(users []*discordgo.User, id string) bool {
