@@ -403,12 +403,11 @@ func isImageAttachment(attachment *discordgo.MessageAttachment) bool {
 		return false
 	}
 
-	// Grok API supported image formats: JPEG, PNG, GIF, WebP
+	// Grok API supported image formats: JPEG, PNG, WebP
 	supportedImageTypes := []string{
 		"image/jpeg",
-		"image/jpg",
+		"image/jpg", 
 		"image/png",
-		"image/gif",
 		"image/webp",
 	}
 
@@ -425,7 +424,7 @@ func isImageAttachment(attachment *discordgo.MessageAttachment) bool {
 	// Fallback: check file extension if content type is not available
 	if attachment.Filename != "" {
 		filename := strings.ToLower(attachment.Filename)
-		supportedExtensions := []string{".jpg", ".jpeg", ".png", ".gif", ".webp"}
+		supportedExtensions := []string{".jpg", ".jpeg", ".png", ".webp"}
 		for _, ext := range supportedExtensions {
 			if strings.HasSuffix(filename, ext) {
 				return true
