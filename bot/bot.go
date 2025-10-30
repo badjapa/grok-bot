@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -251,14 +252,7 @@ func handleMessage(discord *discordgo.Session, message *discordgo.MessageCreate)
 	content := strings.TrimSpace(message.Content)
 	channelID := message.ChannelID
 	attachments := message.Attachments
-	imageURLs := make([]string, 0)
-	if len(attachments) > 0 {
-		for _, attachment := range attachments {
-			if strings.HasPrefix(attachment.ContentType, "image/") {
-				imageURLs = append(imageURLs, attachment.URL)
-			}
-		}
-	}
+	imageURLs := extractImageURLsFromAttachments(attachments)
 
 	if !doesMessageMention(message.Mentions, discord.State.User.ID) {
 
@@ -357,38 +351,86 @@ func sendAsMarkdownFile(discord *discordgo.Session, channelID, content string) e
 	return nil
 }
 
-// extractImageURLsFromAttachments extracts image URLs from Discord message attachments
+// validateImageURL checks if an image URL is accessible (not 404)
+func validateImageURL(url string) bool {
+	if url == "" {
+		return false
+	}
+
+	// Create HTTP client with timeout
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	// Use HEAD request to check if URL is accessible without downloading the full content
+	resp, err := client.Head(url)
+	if err != nil {
+		log.Printf("Error validating image URL %s: %v", url, err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	// Check if the response is successful (2xx status codes)
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return true
+	}
+
+	log.Printf("Image URL %s returned status %d", url, resp.StatusCode)
+	return false
+}
+
+// extractImageURLsFromAttachments extracts and validates image URLs from Discord message attachments
 func extractImageURLsFromAttachments(attachments []*discordgo.MessageAttachment) []string {
 	var imageURLs []string
 
 	for _, attachment := range attachments {
 		if attachment != nil && isImageAttachment(attachment) {
-			imageURLs = append(imageURLs, attachment.URL)
+			// Validate URL before adding to list
+			if validateImageURL(attachment.URL) {
+				imageURLs = append(imageURLs, attachment.URL)
+			} else {
+				log.Printf("Skipping invalid image URL: %s", attachment.URL)
+			}
 		}
 	}
 
 	return imageURLs
 }
 
-// isImageAttachment checks if a Discord attachment is an image
+// isImageAttachment checks if a Discord attachment is an image supported by Grok API
 func isImageAttachment(attachment *discordgo.MessageAttachment) bool {
 	if attachment == nil {
 		return false
 	}
 
-	// Check file extension
-	filename := strings.ToLower(attachment.Filename)
-	imageExtensions := []string{".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".svg"}
-	for _, ext := range imageExtensions {
-		if strings.HasSuffix(filename, ext) {
-			return true
+	// Grok API supported image formats: JPEG, PNG, GIF, WebP
+	supportedImageTypes := []string{
+		"image/jpeg",
+		"image/jpg",
+		"image/png",
+		"image/gif",
+		"image/webp",
+	}
+
+	// Check content type first (most reliable)
+	if attachment.ContentType != "" {
+		contentType := strings.ToLower(attachment.ContentType)
+		for _, supportedType := range supportedImageTypes {
+			if contentType == supportedType {
+				return true
+			}
 		}
 	}
 
-	// Also check content type if available
-	if attachment.ContentType != "" {
-		contentType := strings.ToLower(attachment.ContentType)
-		return strings.HasPrefix(contentType, "image/")
+	// Fallback: check file extension if content type is not available
+	if attachment.Filename != "" {
+		filename := strings.ToLower(attachment.Filename)
+		supportedExtensions := []string{".jpg", ".jpeg", ".png", ".gif", ".webp"}
+		for _, ext := range supportedExtensions {
+			if strings.HasSuffix(filename, ext) {
+				return true
+			}
+		}
 	}
 
 	return false

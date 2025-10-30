@@ -27,7 +27,7 @@ type ContentItem struct {
 // ChatMessage represents a message in the chat completion request
 type ChatMessage struct {
 	Role     string      `json:"role"`
-	Content  interface{} `json:"content"`            // Can be string or []ContentItem for multimodal
+	Content  any `json:"content"`            // Can be string or []ContentItem for multimodal
 	Username string      `json:"username,omitempty"` // Optional username for context
 }
 
