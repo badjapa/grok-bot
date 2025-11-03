@@ -2,7 +2,9 @@ package bot
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -351,6 +353,60 @@ func sendAsMarkdownFile(discord *discordgo.Session, channelID, content string) e
 	return nil
 }
 
+// downloadImage downloads an image from a URL and returns the bytes and content type
+func downloadImage(url string) ([]byte, string, error) {
+	if url == "" {
+		return nil, "", fmt.Errorf("empty URL")
+	}
+
+	// Create HTTP client with timeout
+	client := &http.Client{
+		Timeout: 30 * time.Second, // Longer timeout for downloading image content
+	}
+
+	// Download the image
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to download image: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Check if the response is successful
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, "", fmt.Errorf("image download failed with status %d", resp.StatusCode)
+	}
+
+	// Read the image data
+	imageData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to read image data: %w", err)
+	}
+
+	// Check image size (limit to 20MB to be safe with API limits)
+	const maxImageSize = 20 * 1024 * 1024 // 20MB
+	if len(imageData) > maxImageSize {
+		return nil, "", fmt.Errorf("image too large: %d bytes (max %d bytes)", len(imageData), maxImageSize)
+	}
+
+	// Get content type from response header
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		// Fallback to detecting from URL or default
+		contentType = "image/jpeg"
+	}
+
+	return imageData, contentType, nil
+}
+
+// imageToDataURL converts image bytes to a base64 data URL
+func imageToDataURL(imageData []byte, contentType string) string {
+	// Encode to base64
+	base64Data := base64.StdEncoding.EncodeToString(imageData)
+
+	// Return data URL
+	return fmt.Sprintf("data:%s;base64,%s", contentType, base64Data)
+}
+
 // validateImageURL checks if an image URL is accessible (not 404)
 func validateImageURL(url string) bool {
 	if url == "" {
@@ -379,19 +435,28 @@ func validateImageURL(url string) bool {
 	return false
 }
 
-// extractImageURLsFromAttachments extracts and validates image URLs from Discord message attachments
+// extractImageURLsFromAttachments extracts image URLs from Discord message attachments,
+// downloads them, and converts them to base64 data URLs for reliable API access
 func extractImageURLsFromAttachments(attachments []*discordgo.MessageAttachment) []string {
 	var imageURLs []string
 
 	for _, attachment := range attachments {
-		if attachment != nil && isImageAttachment(attachment) {
-			// Validate URL before adding to list
-			if validateImageURL(attachment.URL) {
-				imageURLs = append(imageURLs, attachment.URL)
-			} else {
-				log.Printf("Skipping invalid image URL: %s", attachment.URL)
-			}
+		if attachment == nil || !isImageAttachment(attachment) {
+			continue
 		}
+
+		// Download the image
+		imageData, contentType, err := downloadImage(attachment.URL)
+		if err != nil {
+			log.Printf("Failed to download image from %s: %v", attachment.URL, err)
+			continue
+		}
+
+		// Convert to base64 data URL
+		dataURL := imageToDataURL(imageData, contentType)
+		imageURLs = append(imageURLs, dataURL)
+
+		log.Printf("Successfully converted image %s to base64 data URL (%d bytes)", attachment.Filename, len(imageData))
 	}
 
 	return imageURLs
@@ -406,7 +471,7 @@ func isImageAttachment(attachment *discordgo.MessageAttachment) bool {
 	// Grok API supported image formats: JPEG, PNG, WebP
 	supportedImageTypes := []string{
 		"image/jpeg",
-		"image/jpg", 
+		"image/jpg",
 		"image/png",
 		"image/webp",
 	}
