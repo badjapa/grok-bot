@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"os/signal"
@@ -390,10 +391,32 @@ func populateHistoryFromChannels(discord *discordgo.Session) {
 	log.Println("=== Finished populating chat history ===")
 }
 
+const (
+	kekwEmoji       = "KEKW:734305966190887012"
+	kekwReactChance = 0.1
+)
+
+func maybeReactKEKW(discord *discordgo.Session, message *discordgo.MessageCreate) {
+	if message.Author.Bot {
+		return
+	}
+	if config != nil && !config.Bot.EnableEmojis {
+		return
+	}
+	if rand.Float64() >= kekwReactChance {
+		return
+	}
+	if err := discord.MessageReactionAdd(message.ChannelID, message.ID, kekwEmoji); err != nil {
+		log.Printf("Error adding KEKW reaction: %v", err)
+	}
+}
+
 func handleMessage(discord *discordgo.Session, message *discordgo.MessageCreate) {
 	if message.Author.ID == discord.State.User.ID {
 		return
 	}
+
+	maybeReactKEKW(discord, message)
 
 	content := strings.TrimSpace(message.Content)
 	channelID := message.ChannelID
