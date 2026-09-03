@@ -1,3 +1,5 @@
 .env
+.testenv
 env.bat
+testenv.bat
 tmp/

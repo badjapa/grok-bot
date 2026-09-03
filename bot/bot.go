@@ -39,12 +39,10 @@ func RunWithConfig(cfg *Config) {
 		log.Fatal("Discord Bot token not provided")
 	}
 
-	discord, err := discordgo.New("Bot " + config.Discord.Token)
+	discord, err := newDiscordSession(config.Discord.Token)
 	if err != nil {
 		log.Fatal("Error connecting to discord")
 	}
-
-	discord.AddHandler(handleMessage)
 
 	err = discord.Open()
 	if err != nil {
@@ -80,12 +78,10 @@ func RunWithConfigAsync(ctx context.Context, cfg *Config) {
 		log.Fatal("Discord Bot token not provided")
 	}
 
-	discord, err := discordgo.New("Bot " + config.Discord.Token)
+	discord, err := newDiscordSession(config.Discord.Token)
 	if err != nil {
 		log.Fatal("Error connecting to discord")
 	}
-
-	discord.AddHandler(handleMessage)
 
 	err = discord.Open()
 	if err != nil {
@@ -104,6 +100,154 @@ func RunWithConfigAsync(ctx context.Context, cfg *Config) {
 	// Wait for context cancellation instead of signal
 	<-ctx.Done()
 	log.Println("Discord bot shutting down...")
+}
+
+func newDiscordSession(token string) (*discordgo.Session, error) {
+	discord, err := discordgo.New("Bot " + token)
+	if err != nil {
+		return nil, err
+	}
+
+	// Cache recent messages so MessageDelete includes the original author/content.
+	discord.State.MaxMessageCount = 1000
+	discord.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMessages | discordgo.IntentsMessageContent
+	discord.AddHandler(handleMessage)
+	discord.AddHandler(handleMessageDelete)
+	return discord, nil
+}
+
+func handleMessageDelete(discord *discordgo.Session, deleted *discordgo.MessageDelete) {
+	original := deleted.BeforeDelete
+	if original == nil || original.Author == nil {
+		return
+	}
+	// Skip the bot's own messages so restore notices can still be removed.
+	if discord.State.User != nil && original.Author.ID == discord.State.User.ID {
+		return
+	}
+
+	guildID := deleted.GuildID
+	channelID := deleted.ChannelID
+	go restoreDeletedMessage(discord, guildID, channelID, original)
+}
+
+func restoreDeletedMessage(discord *discordgo.Session, guildID, channelID string, original *discordgo.Message) {
+	deletedAt := time.Now()
+	deleterID := original.Author.ID
+	deleterKnown := false
+
+	if guildID != "" {
+		if id, ok, ts := lookupMessageDeleter(discord, guildID, channelID, original.ID, original.Author.ID, deletedAt); ok {
+			deleterID = id
+			deleterKnown = true
+			if !ts.IsZero() {
+				deletedAt = ts
+			}
+		}
+	}
+
+	restored := formatRestoredMessage(original, deleterID, deleterKnown, deletedAt)
+	if err := sendMessage(discord, channelID, restored); err != nil {
+		log.Printf("Error restoring deleted message: %v", err)
+	}
+}
+
+func lookupMessageDeleter(discord *discordgo.Session, guildID, channelID, messageID, authorID string, deletedAt time.Time) (string, bool, time.Time) {
+	time.Sleep(500 * time.Millisecond)
+
+	audit, err := discord.GuildAuditLog(guildID, "", "", int(discordgo.AuditLogActionMessageDelete), 10)
+	if err != nil {
+		return "", false, time.Time{}
+	}
+
+	var best *discordgo.AuditLogEntry
+	for _, entry := range audit.AuditLogEntries {
+		if entry == nil || entry.ActionType == nil || *entry.ActionType != discordgo.AuditLogActionMessageDelete {
+			continue
+		}
+		if entry.TargetID != authorID {
+			continue
+		}
+		if entry.Options != nil {
+			if entry.Options.ChannelID != "" && entry.Options.ChannelID != channelID {
+				continue
+			}
+			if entry.Options.MessageID != "" && entry.Options.MessageID != messageID {
+				continue
+			}
+		}
+		entryTime, err := discordgo.SnowflakeTimestamp(entry.ID)
+		if err != nil {
+			continue
+		}
+		if entryTime.Before(deletedAt.Add(-5*time.Second)) || entryTime.After(deletedAt.Add(5*time.Second)) {
+			continue
+		}
+		if best == nil || entry.ID > best.ID {
+			best = entry
+		}
+	}
+
+	if best == nil || best.UserID == "" {
+		return "", false, time.Time{}
+	}
+
+	ts, err := discordgo.SnowflakeTimestamp(best.ID)
+	if err != nil {
+		ts = time.Time{}
+	}
+	return best.UserID, true, ts
+}
+
+func formatRestoredMessage(original *discordgo.Message, deleterID string, deleterFromAudit bool, deletedAt time.Time) string {
+	authorMention := fmt.Sprintf("<@%s>", original.Author.ID)
+	authorName := original.Author.Username
+	if original.Author.GlobalName != "" {
+		authorName = original.Author.GlobalName
+	}
+
+	deleterLine := fmt.Sprintf("<@%s> (assumed author; Discord does not log self-deletes)", deleterID)
+	if deleterFromAudit {
+		deleterLine = fmt.Sprintf("<@%s>", deleterID)
+	}
+
+	var b strings.Builder
+	b.WriteString("**Deleted message restored**\n")
+	b.WriteString(fmt.Sprintf("Author: %s (`%s`)\n", authorMention, authorName))
+	b.WriteString(fmt.Sprintf("Deleted by: %s\n", deleterLine))
+	b.WriteString(fmt.Sprintf("Deleted: <t:%d:F> (<t:%d:R>)\n", deletedAt.Unix(), deletedAt.Unix()))
+
+	if !original.Timestamp.IsZero() {
+		b.WriteString(fmt.Sprintf("Originally sent: <t:%d:F>\n", original.Timestamp.Unix()))
+	}
+
+	b.WriteString("\n")
+	content := strings.TrimSpace(original.Content)
+	if content != "" {
+		b.WriteString(content)
+	} else {
+		b.WriteString("(no text content)")
+	}
+
+	if len(original.Attachments) > 0 {
+		b.WriteString("\n\nAttachments:")
+		for _, att := range original.Attachments {
+			if att == nil {
+				continue
+			}
+			url := att.URL
+			if url == "" {
+				url = att.ProxyURL
+			}
+			name := att.Filename
+			if name == "" {
+				name = "attachment"
+			}
+			b.WriteString(fmt.Sprintf("\n- %s: %s", name, url))
+		}
+	}
+
+	return b.String()
 }
 
 // populateHistoryFromChannels reads recent messages from channels with read/write access to populate chat history
