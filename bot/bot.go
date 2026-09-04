@@ -207,11 +207,6 @@ func formatRestoredMessage(original *discordgo.Message, deleterID string, delete
 		authorName = original.Author.GlobalName
 	}
 
-	deleteLine := fmt.Sprintf("<@%s> (assumed author; Discord does not log self-deletes)", deleterID)
-	if deleterFromAudit {
-		deleteLine = fmt.Sprintf("<@%s>", deleterID)
-	}
-
 	var b strings.Builder
 	b.WriteString("**DONT DELETING**\n")
 	b.WriteString(fmt.Sprintf("Author: %s (`%s`)\n", authorMention, authorName))
