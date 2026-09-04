@@ -213,9 +213,8 @@ func formatRestoredMessage(original *discordgo.Message, deleterID string, delete
 	}
 
 	var b strings.Builder
-	b.WriteString("**Deleted message restored**\n")
+	b.WriteString("**DONT DELETING**\n")
 	b.WriteString(fmt.Sprintf("Author: %s (`%s`)\n", authorMention, authorName))
-	b.WriteString(fmt.Sprintf("Deleted by: %s\n", deleterLine))
 	b.WriteString(fmt.Sprintf("Deleted: <t:%d:F> (<t:%d:R>)\n", deletedAt.Unix(), deletedAt.Unix()))
 
 	if !original.Timestamp.IsZero() {
