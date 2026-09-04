@@ -276,6 +276,8 @@ func handleMessage(discord *discordgo.Session, message *discordgo.MessageCreate)
 		// Construct the replacement message format
 		repostMessage := fmt.Sprintf("**%s** sent:\n%s", message.Author.Username, fixedContent)
 
+		log.Printf("Reposting message: %s", repostMessage)
+
 		// Delete original message
 		err := discord.ChannelMessageDelete(message.ChannelID, message.ID)
 		if err != nil {
