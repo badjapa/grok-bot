@@ -123,9 +123,9 @@ func handleMessageDelete(discord *discordgo.Session, deleted *discordgo.MessageD
 		return
 	}
 	// Skip the bot's own messages so restore notices can still be removed.
-	if discord.State.User != nil && original.Author.ID == discord.State.User.ID {
-		return
-	}
+	//if discord.State.User != nil && original.Author.ID == discord.State.User.ID {
+	//	return
+	//}
 
 	guildID := deleted.GuildID
 	channelID := deleted.ChannelID
