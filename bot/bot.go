@@ -62,7 +62,6 @@ func RunWithConfig(cfg *Config) {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)
 	<-c
-
 }
 
 // RunWithConfigAsync runs the bot with the provided configuration and supports context cancellation
@@ -109,140 +108,9 @@ func newDiscordSession(token string) (*discordgo.Session, error) {
 		return nil, err
 	}
 
-	// Cache recent messages so MessageDelete includes the original author/content.
-	discord.State.MaxMessageCount = 1000
 	discord.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMessages | discordgo.IntentsMessageContent
 	discord.AddHandler(handleMessage)
-	discord.AddHandler(handleMessageDelete)
 	return discord, nil
-}
-
-func handleMessageDelete(discord *discordgo.Session, deleted *discordgo.MessageDelete) {
-	original := deleted.BeforeDelete
-	if original == nil || original.Author == nil {
-		return
-	}
-	// Skip the bot's own messages so restore notices can still be removed.
-	//if discord.State.User != nil && original.Author.ID == discord.State.User.ID {
-	//	return
-	//}
-
-	guildID := deleted.GuildID
-	channelID := deleted.ChannelID
-	go restoreDeletedMessage(discord, guildID, channelID, original)
-}
-
-func restoreDeletedMessage(discord *discordgo.Session, guildID, channelID string, original *discordgo.Message) {
-	deletedAt := time.Now()
-	deleterID := original.Author.ID
-	deleterKnown := false
-
-	if guildID != "" {
-		if id, ok, ts := lookupMessageDeleter(discord, guildID, channelID, original.ID, original.Author.ID, deletedAt); ok {
-			deleterID = id
-			deleterKnown = true
-			if !ts.IsZero() {
-				deletedAt = ts
-			}
-		}
-	}
-
-	restored := formatRestoredMessage(original, deleterID, deleterKnown, deletedAt)
-	if err := sendMessage(discord, channelID, restored); err != nil {
-		log.Printf("Error restoring deleted message: %v", err)
-	}
-}
-
-func lookupMessageDeleter(discord *discordgo.Session, guildID, channelID, messageID, authorID string, deletedAt time.Time) (string, bool, time.Time) {
-	time.Sleep(500 * time.Millisecond)
-
-	audit, err := discord.GuildAuditLog(guildID, "", "", int(discordgo.AuditLogActionMessageDelete), 10)
-	if err != nil {
-		return "", false, time.Time{}
-	}
-
-	var best *discordgo.AuditLogEntry
-	for _, entry := range audit.AuditLogEntries {
-		if entry == nil || entry.ActionType == nil || *entry.ActionType != discordgo.AuditLogActionMessageDelete {
-			continue
-		}
-		if entry.TargetID != authorID {
-			continue
-		}
-		if entry.Options != nil {
-			if entry.Options.ChannelID != "" && entry.Options.ChannelID != channelID {
-				continue
-			}
-			if entry.Options.MessageID != "" && entry.Options.MessageID != messageID {
-				continue
-			}
-		}
-		entryTime, err := discordgo.SnowflakeTimestamp(entry.ID)
-		if err != nil {
-			continue
-		}
-		if entryTime.Before(deletedAt.Add(-5*time.Second)) || entryTime.After(deletedAt.Add(5*time.Second)) {
-			continue
-		}
-		if best == nil || entry.ID > best.ID {
-			best = entry
-		}
-	}
-
-	if best == nil || best.UserID == "" {
-		return "", false, time.Time{}
-	}
-
-	ts, err := discordgo.SnowflakeTimestamp(best.ID)
-	if err != nil {
-		ts = time.Time{}
-	}
-	return best.UserID, true, ts
-}
-
-func formatRestoredMessage(original *discordgo.Message, deleterID string, deleterFromAudit bool, deletedAt time.Time) string {
-	authorMention := fmt.Sprintf("<@%s>", original.Author.ID)
-	authorName := original.Author.Username
-	if original.Author.GlobalName != "" {
-		authorName = original.Author.GlobalName
-	}
-
-	var b strings.Builder
-	b.WriteString("**DONT DELETING**\n")
-	b.WriteString(fmt.Sprintf("Author: %s (`%s`)\n", authorMention, authorName))
-	b.WriteString(fmt.Sprintf("Deleted: <t:%d:F> (<t:%d:R>)\n", deletedAt.Unix(), deletedAt.Unix()))
-
-	if !original.Timestamp.IsZero() {
-		b.WriteString(fmt.Sprintf("Originally sent: <t:%d:F>\n", original.Timestamp.Unix()))
-	}
-
-	b.WriteString("\n")
-	content := strings.TrimSpace(original.Content)
-	if content != "" {
-		b.WriteString(content)
-	} else {
-		b.WriteString("(no text content)")
-	}
-
-	if len(original.Attachments) > 0 {
-		b.WriteString("\n\nAttachments:")
-		for _, att := range original.Attachments {
-			if att == nil {
-				continue
-			}
-			url := att.URL
-			if url == "" {
-				url = att.ProxyURL
-			}
-			name := att.Filename
-			if name == "" {
-				name = "attachment"
-			}
-			b.WriteString(fmt.Sprintf("\n- %s: %s", name, url))
-		}
-	}
-
-	return b.String()
 }
 
 // populateHistoryFromChannels reads recent messages from channels with read/write access to populate chat history
@@ -280,17 +148,13 @@ func populateHistoryFromChannels(discord *discordgo.Session) {
 			}
 
 			// Get recent messages (last maxHistory messages per channel)
-			// Try different batch sizes to work around unknown component type errors
 			var messages []*discordgo.Message
 			var msgErr error
 
-			// Try to get messages, starting with the full amount
 			messages, msgErr = discord.ChannelMessages(channel.ID, chatHistory.GetMax(), "", "", "")
 			if msgErr != nil && strings.Contains(msgErr.Error(), "unknown component type") {
-				// If we get unknown component type error, try smaller batches
 				log.Printf("Channel %s has messages with unknown components, trying smaller batches...", channel.Name)
 
-				// Try smaller batches to work around problematic messages
 				for batchSize := chatHistory.GetMax() / 2; batchSize >= 5; batchSize /= 2 {
 					messages, msgErr = discord.ChannelMessages(channel.ID, batchSize, "", "", "")
 					if msgErr == nil {
@@ -298,7 +162,7 @@ func populateHistoryFromChannels(discord *discordgo.Session) {
 						break
 					}
 					if !strings.Contains(msgErr.Error(), "unknown component type") {
-						break // Different error, don't retry
+						break
 					}
 				}
 			}
@@ -308,7 +172,6 @@ func populateHistoryFromChannels(discord *discordgo.Session) {
 				continue
 			}
 
-			// Filter out messages that couldn't be parsed due to unknown components
 			var validMessages []*discordgo.Message
 			for _, msg := range messages {
 				if msg != nil && (msg.Content != "" || len(msg.Attachments) > 0) {
@@ -321,19 +184,16 @@ func populateHistoryFromChannels(discord *discordgo.Session) {
 			for i := len(messages) - 1; i >= 0; i-- {
 				msg := messages[i]
 
-				// Skip bot's own messages
 				if msg.Author.ID == discord.State.User.ID {
 					continue
 				}
 
-				// Skip empty messages (no content and no attachments)
 				content := strings.TrimSpace(msg.Content)
 				imageURLs := extractImageURLsFromAttachments(msg.Attachments)
 				if content == "" && len(imageURLs) == 0 {
 					continue
 				}
 
-				// Determine if this was a message that addressed the bot
 				addressed := false
 				for _, mention := range msg.Mentions {
 					if mention.ID == discord.State.User.ID {
@@ -345,7 +205,6 @@ func populateHistoryFromChannels(discord *discordgo.Session) {
 					addressed = strings.Contains(strings.ToLower(content), "@grok")
 				}
 
-				// Clean content for history
 				cleanContent := content
 				if addressed {
 					cleanContent = strings.ReplaceAll(cleanContent, fmt.Sprintf("<@%s>", discord.State.User.ID), "")
@@ -354,13 +213,10 @@ func populateHistoryFromChannels(discord *discordgo.Session) {
 				}
 
 				if cleanContent != "" || len(imageURLs) > 0 {
-					// Add user message to history using multimodal message creation
 					multimodalMsg := CreateMultimodalMessage("user", cleanContent, imageURLs, msg.Author.Username)
 					chatHistory.Append(channel.ID, multimodalMsg)
 
-					// If this was an addressed message, look for bot's response in subsequent messages
 					if addressed {
-						// Look for bot's response in the next few messages
 						for j := i - 1; j >= 0 && j > i-5; j-- {
 							responseMsg := messages[j]
 							if responseMsg.Author.ID == discord.State.User.ID {
@@ -410,6 +266,30 @@ func handleMessage(discord *discordgo.Session, message *discordgo.MessageCreate)
 		return
 	}
 
+	// Feature: Replace fixupx.com with x.com links
+	if !message.Author.Bot && strings.Contains(strings.ToLower(message.Content), "fixupx.com") {
+		// Replace all occurrences of fixupx.com with x.com
+		fixedContent := strings.ReplaceAll(message.Content, "fixupx.com", "x.com")
+		fixedContent = strings.ReplaceAll(fixedContent, "Fixupx.com", "x.com")
+		fixedContent = strings.ReplaceAll(fixedContent, "FIXUPX.COM", "x.com")
+
+		// Construct the replacement message format
+		repostMessage := fmt.Sprintf("**%s** sent:\n%s", message.Author.Username, fixedContent)
+
+		// Delete original message
+		err := discord.ChannelMessageDelete(message.ChannelID, message.ID)
+		if err != nil {
+			log.Printf("Error deleting message containing fixupx.com: %v", err)
+		}
+
+		// Send corrected text message
+		err = sendMessage(discord, message.ChannelID, repostMessage)
+		if err != nil {
+			log.Printf("Error reposting fixed x.com message: %v", err)
+		}
+		return
+	}
+
 	maybeReactKEKW(discord, message)
 
 	content := strings.TrimSpace(message.Content)
@@ -418,23 +298,18 @@ func handleMessage(discord *discordgo.Session, message *discordgo.MessageCreate)
 	imageURLs := extractImageURLsFromAttachments(attachments)
 
 	if !doesMessageMention(message.Mentions, discord.State.User.ID) {
-
 		chatHistory.Append(channelID, CreateMultimodalMessage("user", content, imageURLs, message.Author.Username))
 	} else {
-		// Remove the bot mention from the content
 		content = strings.ReplaceAll(content, fmt.Sprintf("<@%s>", discord.State.User.ID), "")
 
-		// Build messages with system prompt + prior channel history + new user message
 		prior := chatHistory.Get(channelID)
 		messages := make([]ChatMessage, 0, 1+len(prior)+1)
 		messages = append(messages, ChatMessage{Role: "system", Content: config.Bot.DefaultSystemMessage})
 		messages = append(messages, prior...)
 		messages = append(messages, CreateMultimodalMessage("user", content, imageURLs, message.Author.Username))
 
-		// Send typing indicator
 		discord.ChannelTyping(message.ChannelID)
 
-		// Get response from Grok
 		response, err := grokClient.CreateChatCompletion(messages)
 		if err != nil {
 			log.Printf("Error getting Grok response: %v", err)
@@ -442,46 +317,38 @@ func handleMessage(discord *discordgo.Session, message *discordgo.MessageCreate)
 			return
 		}
 
-		// Append to history: user then assistant
 		chatHistory.Append(channelID, CreateMultimodalMessage("user", content, imageURLs, message.Author.Username))
 		chatHistory.Append(channelID, CreateTextMessage("assistant", response, ""))
 
-		// Send the response back to Discord
 		err = sendMessage(discord, message.ChannelID, response)
 		if err != nil {
 			log.Printf("Error sending message: %v", err)
 		}
 	}
-
 }
 
 // sendMessage sends a message to Discord, handling size limits by sending as file if needed
 func sendMessage(discord *discordgo.Session, channelID, content string) error {
-	// Check if message is within Discord's character limit
 	maxLength := config.Bot.MaxMessageSize
 	if len(content) <= maxLength {
 		_, err := discord.ChannelMessageSend(channelID, content)
 		return err
 	}
 
-	// Message is too long, send as markdown file
 	return sendAsMarkdownFile(discord, channelID, content)
 }
 
 // sendAsMarkdownFile sends content as a markdown file attachment
 func sendAsMarkdownFile(discord *discordgo.Session, channelID, content string) error {
-	// Create a temporary file
 	timestamp := time.Now().Format("2006-01-02_15-04-05")
 	filename := fmt.Sprintf("grok_response_%s.md", timestamp)
 
-	// Create the file
 	file, err := os.CreateTemp("", filename)
 	if err != nil {
 		return fmt.Errorf("failed to create temp file: %w", err)
 	}
-	defer os.Remove(file.Name()) // Clean up temp file
+	defer os.Remove(file.Name())
 
-	// Write content to file
 	_, err = file.WriteString(content)
 	if err != nil {
 		file.Close()
@@ -489,7 +356,6 @@ func sendAsMarkdownFile(discord *discordgo.Session, channelID, content string) e
 	}
 	file.Close()
 
-	// Check file size
 	fileInfo, err := os.Stat(file.Name())
 	if err != nil {
 		return fmt.Errorf("failed to get file info: %w", err)
@@ -499,7 +365,6 @@ func sendAsMarkdownFile(discord *discordgo.Session, channelID, content string) e
 		return fmt.Errorf("response too large even for file upload (%d bytes)", fileInfo.Size())
 	}
 
-	// Send file to Discord
 	fileReader, err := os.Open(file.Name())
 	if err != nil {
 		return fmt.Errorf("failed to open file for reading: %w", err)
@@ -520,39 +385,32 @@ func downloadImage(url string) ([]byte, string, error) {
 		return nil, "", fmt.Errorf("empty URL")
 	}
 
-	// Create HTTP client with timeout
 	client := &http.Client{
-		Timeout: 30 * time.Second, // Longer timeout for downloading image content
+		Timeout: 30 * time.Second,
 	}
 
-	// Download the image
 	resp, err := client.Get(url)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to download image: %w", err)
 	}
 	defer resp.Body.Close()
 
-	// Check if the response is successful
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, "", fmt.Errorf("image download failed with status %d", resp.StatusCode)
 	}
 
-	// Read the image data
 	imageData, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to read image data: %w", err)
 	}
 
-	// Check image size (limit to 20MB to be safe with API limits)
-	const maxImageSize = 20 * 1024 * 1024 // 20MB
+	const maxImageSize = 20 * 1024 * 1024
 	if len(imageData) > maxImageSize {
 		return nil, "", fmt.Errorf("image too large: %d bytes (max %d bytes)", len(imageData), maxImageSize)
 	}
 
-	// Get content type from response header
 	contentType := resp.Header.Get("Content-Type")
 	if contentType == "" {
-		// Fallback to detecting from URL or default
 		contentType = "image/jpeg"
 	}
 
@@ -561,10 +419,7 @@ func downloadImage(url string) ([]byte, string, error) {
 
 // imageToDataURL converts image bytes to a base64 data URL
 func imageToDataURL(imageData []byte, contentType string) string {
-	// Encode to base64
 	base64Data := base64.StdEncoding.EncodeToString(imageData)
-
-	// Return data URL
 	return fmt.Sprintf("data:%s;base64,%s", contentType, base64Data)
 }
 
@@ -574,12 +429,10 @@ func validateImageURL(url string) bool {
 		return false
 	}
 
-	// Create HTTP client with timeout
 	client := &http.Client{
 		Timeout: 10 * time.Second,
 	}
 
-	// Use HEAD request to check if URL is accessible without downloading the full content
 	resp, err := client.Head(url)
 	if err != nil {
 		log.Printf("Error validating image URL %s: %v", url, err)
@@ -587,7 +440,6 @@ func validateImageURL(url string) bool {
 	}
 	defer resp.Body.Close()
 
-	// Check if the response is successful (2xx status codes)
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return true
 	}
@@ -606,14 +458,12 @@ func extractImageURLsFromAttachments(attachments []*discordgo.MessageAttachment)
 			continue
 		}
 
-		// Download the image
 		imageData, contentType, err := downloadImage(attachment.URL)
 		if err != nil {
 			log.Printf("Failed to download image from %s: %v", attachment.URL, err)
 			continue
 		}
 
-		// Convert to base64 data URL
 		dataURL := imageToDataURL(imageData, contentType)
 		imageURLs = append(imageURLs, dataURL)
 
@@ -629,7 +479,6 @@ func isImageAttachment(attachment *discordgo.MessageAttachment) bool {
 		return false
 	}
 
-	// Grok API supported image formats: JPEG, PNG, WebP
 	supportedImageTypes := []string{
 		"image/jpeg",
 		"image/jpg",
@@ -637,7 +486,6 @@ func isImageAttachment(attachment *discordgo.MessageAttachment) bool {
 		"image/webp",
 	}
 
-	// Check content type first (most reliable)
 	if attachment.ContentType != "" {
 		contentType := strings.ToLower(attachment.ContentType)
 		for _, supportedType := range supportedImageTypes {
@@ -647,7 +495,6 @@ func isImageAttachment(attachment *discordgo.MessageAttachment) bool {
 		}
 	}
 
-	// Fallback: check file extension if content type is not available
 	if attachment.Filename != "" {
 		filename := strings.ToLower(attachment.Filename)
 		supportedExtensions := []string{".jpg", ".jpeg", ".png", ".webp"}
