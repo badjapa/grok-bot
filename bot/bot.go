@@ -207,9 +207,9 @@ func formatRestoredMessage(original *discordgo.Message, deleterID string, delete
 		authorName = original.Author.GlobalName
 	}
 
-	deleterLine := fmt.Sprintf("<@%s> (assumed author; Discord does not log self-deletes)", deleterID)
+	deleteLine := fmt.Sprintf("<@%s> (assumed author; Discord does not log self-deletes)", deleterID)
 	if deleterFromAudit {
-		deleterLine = fmt.Sprintf("<@%s>", deleterID)
+		deleteLine = fmt.Sprintf("<@%s>", deleterID)
 	}
 
 	var b strings.Builder
