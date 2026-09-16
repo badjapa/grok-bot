@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math/rand"
 	"net/http"
 	"os"
 	"os/signal"
@@ -241,23 +240,39 @@ func populateHistoryFromChannels(discord *discordgo.Session) {
 	log.Println("=== Finished populating chat history ===")
 }
 
-const (
-	kekwEmoji       = "KEKW:734305966190887012"
-	kekwReactChance = 0.1
-)
+const reactionEmoji = "ReallyPal2:1345424314790314085"
 
-func maybeReactKEKW(discord *discordgo.Session, message *discordgo.MessageCreate) {
+var reactionPatterns = []string{
+	"igger",
+	"igga",
+	"nigg",
+	"nig",
+	"negro",
+	"n word",
+	"n-word",
+	"nword",
+	// "another pattern",
+}
+
+func maybeReact(discord *discordgo.Session, message *discordgo.MessageCreate) {
 	if message.Author.Bot {
 		return
 	}
 	if config != nil && !config.Bot.EnableEmojis {
 		return
 	}
-	if rand.Float64() >= kekwReactChance {
+
+	content := strings.ToLower(message.Content)
+	for _, pattern := range reactionPatterns {
+		pattern = strings.TrimSpace(strings.ToLower(pattern))
+		if pattern == "" || !strings.Contains(content, pattern) {
+			continue
+		}
+
+		if err := discord.MessageReactionAdd(message.ChannelID, message.ID, reactionEmoji); err != nil {
+			log.Printf("Error adding reaction %q: %v", reactionEmoji, err)
+		}
 		return
-	}
-	if err := discord.MessageReactionAdd(message.ChannelID, message.ID, kekwEmoji); err != nil {
-		log.Printf("Error adding KEKW reaction: %v", err)
 	}
 }
 
@@ -292,7 +307,7 @@ func handleMessage(discord *discordgo.Session, message *discordgo.MessageCreate)
 		return
 	}
 
-	maybeReactKEKW(discord, message)
+	maybeReact(discord, message)
 
 	content := strings.TrimSpace(message.Content)
 	channelID := message.ChannelID
