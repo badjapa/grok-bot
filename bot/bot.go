@@ -264,7 +264,7 @@ func maybeReact(discord *discordgo.Session, message *discordgo.MessageCreate) {
 
 	content := strings.ToLower(message.Content)
 	for _, pattern := range reactionPatterns {
-		pattern = strings.TrimSpace(strings.ToLower(pattern))
+		pattern = strings.ToLower(pattern)
 		if pattern == "" || !strings.Contains(content, pattern) {
 			continue
 		}
