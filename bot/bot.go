@@ -246,7 +246,7 @@ var reactionPatterns = []string{
 	"igger",
 	"igga",
 	"nigg",
-	"nig",
+	" nig ",
 	"negro",
 	"n word",
 	"n-word",
